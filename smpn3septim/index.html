@@ -85,11 +85,9 @@ document.getElementById('alt').href = SIAP_API;
 window.__prefetchAppHtml = null;
 (function mulaiPrefetch() {
   if (!window.fetch || !window.caches) return;
-  var url = SIAP_API + '?mode=html&t=' + Date.now();
-  window.__prefetchAppHtml = fetch(url, { credentials: 'omit', cache: 'no-store' })
-    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+  // TAHAP 2: pre-fetch pakai ambilTampilanBaru() (sudah support gzip + fallback)
+  window.__prefetchAppHtml = ambilTampilanBaru()
     .then(function (html) {
-      if (html.indexOf('<html') === -1) throw new Error('Isi tidak dikenal');
       // Simpan ke cache yang SAMA dengan mekanisme bawaan, agar bacaTampilan() langsung hit.
       return simpanTampilan(html).then(function () { return html; });
     })
@@ -151,10 +149,33 @@ function gagalMuat(err) {
 // Tampilan aplikasi disimpan di perangkat (Cache browser). Kunjungan berikutnya langsung tampil dari
 // simpanan, sementara versi terbaru diambil diam-diam dan dipakai pada kunjungan selanjutnya.
 var CACHE_NAMA = 'siapbk-tampilan', CACHE_URL = location.origin + '/__siapbk/tampilan.html';
-function ambilTampilanBaru() {
-  return fetch(SIAP_API + '?mode=html&t=' + Date.now(), { credentials: 'omit', cache: 'no-store' })
+/* TAHAP 2: Ambil HTML aplikasi dalam mode gzip (7x lebih kecil di jaringan).
+   Jika browser tidak support DecompressionStream atau gagal, otomatis fallback
+   ke mode=html biasa (tidak terkompresi). */
+function ambilHtmlGzip_() {
+  return fetch(SIAP_API + '?mode=htmlgz&t=' + Date.now(), { credentials: 'omit', cache: 'no-store' })
     .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
-    .then(function (html) { if (html.indexOf('<html') === -1) throw new Error('Isi tidak dikenal'); return html; });
+    .then(function (b64) {
+      if (typeof DecompressionStream === 'undefined') throw new Error('no-decomp');
+      var bin = atob(b64.trim());
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      var ds = new DecompressionStream('gzip');
+      var writer = ds.writable.getWriter();
+      writer.write(bytes.buffer);
+      writer.close();
+      return new Response(ds.readable).text();
+    });
+}
+function ambilTampilanBaru() {
+  return ambilHtmlGzip_()
+    .then(function (html) { if (html.indexOf('<html') === -1) throw new Error('Isi tidak dikenal'); return html; })
+    .catch(function () {
+      // Fallback: mode html biasa (tidak terkompresi)
+      return fetch(SIAP_API + '?mode=html&t=' + Date.now(), { credentials: 'omit', cache: 'no-store' })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(function (html) { if (html.indexOf('<html') === -1) throw new Error('Isi tidak dikenal'); return html; });
+    });
 }
 function simpanTampilan(html) {
   try {
@@ -174,14 +195,13 @@ function bacaTampilan() {
 // Dijalankan DI DALAM halaman aplikasi (setelah tampil dari simpanan): ambil versi terbaru di latar.
 function segarkanLatar(api, nama, url) {
   setTimeout(function () {
-    fetch(api + '?mode=html&t=' + Date.now(), { credentials: 'omit', cache: 'no-store' })
-      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
-      .then(function (html) {
-        if (html.indexOf('<html') === -1 || !window.caches) return;
-        return caches.open(nama).then(function (c) {
-          return c.put(url, new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
-        });
-      }).catch(function () {});
+    // TAHAP 2: background refresh juga pakai gzip (hemat bandwidth)
+    ambilTampilanBaru().then(function (html) {
+      if (html.indexOf('<html') === -1 || !window.caches) return;
+      return caches.open(nama).then(function (c) {
+        return c.put(url, new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+      });
+    }).catch(function () {});
   }, 4000);
 }
 function tampilkan(html, dariSimpanan) {
