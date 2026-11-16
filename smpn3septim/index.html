@@ -6,6 +6,15 @@
 <title>SIAP BK - SMP Negeri 3 Sepatan Timur</title>
 <link rel="icon" type="image/svg+xml" href="/siapbk/ikon.svg">
 <meta name="description" content="SIAP BK - Sistem Informasi & Administrasi Program Bimbingan dan Konseling SMP Negeri 3 Sepatan Timur">
+<meta name="theme-color" content="#1e1b4b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta property="og:type" content="website">
+<meta property="og:title" content="SIAP BK - SMP Negeri 3 Sepatan Timur">
+<meta property="og:description" content="Sistem Informasi & Administrasi Program Bimbingan dan Konseling">
+<meta property="og:image" content="/siapbk/ikon.svg">
+<meta name="twitter:card" content="summary">
+<link rel="manifest" href="/siapbk/manifest.json">
 <link rel="preconnect" href="https://script.google.com" crossorigin>
 <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -134,28 +143,36 @@ function bacaTampilan() {
 // Shim google.script.run -> doPost
 function siapShim() {
   function kirim(nama, args, st) {
-    fetch(window.SIAP_API, {
-      method: 'POST', credentials: 'omit',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ fn: nama, args: args })
-    }).then(function (r) {
-      if (!r.ok) throw new Error('Server sedang sibuk (' + r.status + '). Coba lagi sebentar.');
-      return r.json();
-    }).then(function (res) {
-      if (res && res.ok) {
-        if (nama === 'authLogin' && res.result && res.result.paketAwal) {
-          window.__paketLoginAwal = res.result.paketAwal;
+    var __coba = 0;
+    function __kirimFetch() {
+      return fetch(window.SIAP_API, {
+        method: 'POST', credentials: 'omit',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ fn: nama, args: args })
+      }).then(function (r) {
+        if ((r.status === 429 || r.status >= 500) && __coba < 2) {
+          __coba++;
+          return new Promise(function (res) { setTimeout(function () { __kirimFetch().then(res); }, 800 * __coba); });
         }
-        if (st.ok) st.ok(res.result, st.uo);
-      }
-      else { var e = new Error((res && res.error) || 'Permintaan gagal.'); if (st.gagal) st.gagal(e, st.uo); else console.error(e); }
-    }).catch(function (err) {
-      var e = err instanceof Error ? err : new Error(String(err));
-      if (/Failed to fetch|NetworkError|Load failed/i.test(e.message)) e = new Error('Gagal menghubungi server. Periksa koneksi internet Anda.');
-      if (st.gagal) st.gagal(e, st.uo); else console.error(e);
-    });
+        if (!r.ok) throw new Error('Server sedang sibuk (' + r.status + '). Coba lagi sebentar.');
+        return r.json();
+      }).then(function (res) {
+        if (res && res.ok) {
+          if (nama === 'authLogin' && res.result && res.result.paketAwal) {
+            window.__paketLoginAwal = res.result.paketAwal;
+          }
+          if (st.ok) st.ok(res.result, st.uo);
+        }
+        else { var e = new Error((res && res.error) || 'Permintaan gagal.'); if (st.gagal) st.gagal(e, st.uo); else console.error(e); }
+      }).catch(function (err) {
+        var e = err instanceof Error ? err : new Error(String(err));
+        if (/Failed to fetch|NetworkError|Load failed/i.test(e.message)) e = new Error('Gagal menghubungi server. Periksa koneksi internet Anda.');
+        if (st.gagal) st.gagal(e, st.uo); else console.error(e);
+      });
+    }
+    __kirimFetch();
   }
-  function runner(st) {
+function runner(st) {
     return new Proxy({}, {
       get: function (_, nama) {
         if (nama === 'withSuccessHandler') return function (f) { return runner(Object.assign({}, st, { ok: f })); };
@@ -197,8 +214,28 @@ function segarkanLatarMandiri(apiUrl, cacheNama, cacheUrl, ambilFnStr, panjangLa
   }, 4000);
 }
 
+function patchSetelahMuat() {
+  // Sembunyikan widget dashboard yang tidak diinginkan
+  try {
+    if (!document.getElementById('siapbk-sembunyi-widget')) {
+      var s = document.createElement('style');
+      s.id = 'siapbk-sembunyi-widget';
+      s.textContent = '#kelas-terbanyak-card,#dashboard-mutasi-card{display:none !important}';
+      (document.head || document.documentElement).appendChild(s);
+    }
+  } catch (e) {}
+  function jalankan() {
+    document.querySelectorAll('[data-lucide="id-card"]').forEach(function (el) { el.setAttribute('data-lucide', 'contact'); });
+    document.querySelectorAll('input[type=password]').forEach(function (el) { if (!el.getAttribute('autocomplete')) el.setAttribute('autocomplete', 'current-password'); });
+    if (window.lucide && typeof lucide.createIcons === 'function') { try { lucide.createIcons(); } catch (e) {} }
+  }
+  jalankan();
+  var n = 0;
+  var iv = setInterval(function () { jalankan(); if (++n >= 10) clearInterval(iv); }, 1500);
+}
+
 function tampilkan(html, dariSimpanan) {
-  var shim = IKON_HTML + '<script>window.SIAP_API=' + JSON.stringify(SIAP_API) + ';(' + siapShim.toString() + ')();';
+  var shim = IKON_HTML + '<script>window.SIAP_API=' + JSON.stringify(SIAP_API) + ';(' + siapShim.toString() + ')();(' + patchSetelahMuat.toString() + ')();';
   if (dariSimpanan) {
     shim += '(' + segarkanLatarMandiri.toString() + ')(' +
       JSON.stringify(SIAP_API) + ',' +
