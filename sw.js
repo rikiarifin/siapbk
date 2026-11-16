@@ -1,152 +1,116 @@
-/* ============================================================
-   Service Worker SIAP BK — Optimasi Performa (v2)
-   ------------------------------------------------------------
-   Strategi cache:
-   - CDN (jsdelivr), Google Fonts, gambar Drive: cache-first
-   - Aset static asal sama (landing page, ikon): stale-while-revalidate
-   - Semua request ke Apps Script (script.google.com): bypass/network-only
-     (karena tampilan HTML & data sudah dikelola langsung oleh launcher)
-   ============================================================ */
+/*
+ * SIAP BK Service Worker — percepat repeat visit & offline ringan
+ * Taruh di root project: https://rikiarifin.github.io/siapbk/sw.js
+ * (scope /siapbk/ — mencakup semua subfolder sekolah)
+ * Versi: 1.0 — 2026-11-16
+ */
+var CACHE_VERSION = 'siapbk-v1';
+var CACHE_STATIS = CACHE_VERSION + '-statis';   // CDN, fonts, gambar (immutable)
+var CACHE_DINAMIS = CACHE_VERSION + '-dinamis'; // app shell, data GET (SWR)
 
-var CACHE_VERSION = 'siapbk-v2';
-var STATIC_CACHE = CACHE_VERSION + '-static';
-var CDN_CACHE = CACHE_VERSION + '-cdn';
-
-var ALL_CACHES = [STATIC_CACHE, CDN_CACHE];
-
-// Domain eksternal yang di-cache dengan strategi cache-first
-var CDN_DOMAINS = [
+// CDN & aset immutable yang aman di-cache selamanya (cache-first)
+var POLA_CACHE_FIRST = [
   'cdn.jsdelivr.net',
   'fonts.googleapis.com',
   'fonts.gstatic.com',
   'lh3.googleusercontent.com',
-  'lh4.googleusercontent.com',
-  'lh5.googleusercontent.com',
-  'lh6.googleusercontent.com'
-];
-
-// Aset static yang di-precache saat install
-var PRECACHE_URLS = [
   '/siapbk/ikon.svg'
 ];
 
-/* ---------- INSTALL: pre-cache aset static ---------- */
-self.addEventListener('install', function (event) {
-  event.waitUntil(
-    caches.open(STATIC_CACHE).then(function (cache) {
-      return cache.addAll(PRECACHE_URLS).catch(function () {
-        return Promise.resolve();
-      });
-    }).then(function () {
-      return self.skipWaiting();
-    })
+// Hapus cache lama saat install
+self.addEventListener('install', function (e) {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', function (e) {
+  e.waitUntil(
+    caches.keys().then(function (keys) {
+      return Promise.all(
+        keys.filter(function (k) {
+          // Jangan sentuh cache bawaan aplikasi (siapbk-tampilan)
+          return k.indexOf(CACHE_VERSION) === -1 && k.indexOf('siapbk-tampilan') === -1;
+        }).map(function (k) { return caches.delete(k); })
+      );
+    }).then(function () { return self.clients.claim(); })
   );
 });
 
-/* ---------- ACTIVATE: bersihkan seluruh cache versi lama ---------- */
-self.addEventListener('activate', function (event) {
-  event.waitUntil(
-    caches.keys().then(function (names) {
-      var hapus = names.filter(function (name) {
-        return name.indexOf('siapbk-') === 0 && ALL_CACHES.indexOf(name) === -1;
-      });
-      return Promise.all(hapus.map(function (name) { return caches.delete(name); }));
-    }).then(function () {
-      return self.clients.claim();
-    })
-  );
-});
-
-/* ---------- HELPERS ---------- */
-function termasukDomain(url, daftarDomain) {
-  return daftarDomain.some(function (d) { return url.hostname === d || url.hostname.endsWith('.' + d); });
+// Normalisasi URL: hapus parameter cache-buster ?t= agar cache key stabil
+function normalisasiUrl(url) {
+  try {
+    var u = new URL(url);
+    u.searchParams.delete('t');
+    return u.toString();
+  } catch (err) { return url; }
 }
 
-function staleWhileRevalidate(request, cacheName) {
-  return caches.open(cacheName).then(function (cache) {
-    return cache.match(request).then(function (cached) {
-      var fetchPromise = fetch(request).then(function (response) {
-        if (response && response.status === 200) {
-          cache.put(request, response.clone());
-        }
-        return response;
-      }).catch(function () {
-        return cached;
-      });
-      return cached || fetchPromise;
-    });
-  });
+function termasuk(host, pola) {
+  for (var i = 0; i < pola.length; i++) {
+    var p = pola[i];
+    if (p.charAt(0) === '/') { if (urlPathCocok(host, p)) return true; }
+    else if (host.indexOf(p) !== -1) return true;
+  }
+  return false;
 }
+function urlPathCocok(host, path) { return host.pathname.indexOf(path) !== -1; }
 
-function cacheFirst(request, cacheName) {
-  return caches.open(cacheName).then(function (cache) {
-    return cache.match(request).then(function (cached) {
-      if (cached) return cached;
-      return fetch(request).then(function (response) {
-        if (response && (response.status === 200 || response.type === 'opaque')) {
-          cache.put(request, response.clone());
-        }
-        return response;
-      }).catch(function () {
-        return cached;
-      });
-    });
-  });
-}
-
-function networkFirst(request, cacheName) {
-  return fetch(request).then(function (response) {
-    if (response && response.status === 200) {
-      caches.open(cacheName).then(function (cache) { cache.put(request, response.clone()); });
-    }
-    return response;
-  }).catch(function () {
-    return caches.open(cacheName).then(function (cache) { return cache.match(request); });
-  });
-}
-
-/* ---------- FETCH: routing strategi cache ---------- */
 self.addEventListener('fetch', function (event) {
-  var request = event.request;
+  var req = event.request;
+
+  // 1) POST tidak pernah di-cache (data harus fresh) — lewat ke network
+  if (req.method !== 'GET') { return; }
+
   var url;
-  try { url = new URL(request.url); } catch (e) { return; }
+  try { url = new URL(req.url); } catch (err) { return; }
 
-  // 1) Semua request ke Google Apps Script: langsung ke jaringan (bypass SW)
+  // 2) Aplikasi punya cache sendiri untuk HTML tampilan — jangan ganggu
   if (url.hostname === 'script.google.com' || url.hostname === 'script.googleusercontent.com') {
+    // GET echo (data) — stale-while-revalidate: tampilkan cache lama, update di latar
+    event.respondWith(
+      caches.open(CACHE_DINAMIS).then(function (cache) {
+        var urlNorm = normalisasiUrl(req.url);
+        return cache.match(urlNorm).then(function (cached) {
+          var fetchPromise = fetch(req).then(function (res) {
+            if (res && res.status === 200) { cache.put(urlNorm, res.clone()); }
+            return res;
+          }).catch(function () { return cached; });
+          return cached || fetchPromise;
+        });
+      })
+    );
     return;
   }
 
-  // Hanya cache request GET
-  if (request.method !== 'GET') return;
-
-  // 2) CDN / Fonts / Gambar Drive: cache-first
-  if (termasukDomain(url, CDN_DOMAINS)) {
-    event.respondWith(cacheFirst(request, CDN_CACHE));
+  // 3) CDN / fonts / gambar — cache-first (paling cepat, immutable)
+  if (termasuk(url, POLA_CACHE_FIRST)) {
+    event.respondWith(
+      caches.open(CACHE_STATIS).then(function (cache) {
+        return cache.match(req).then(function (cached) {
+          if (cached) return cached;
+          return fetch(req).then(function (res) {
+            if (res && res.status === 200) { cache.put(req, res.clone()); }
+            return res;
+          });
+        });
+      })
+    );
     return;
   }
 
-  // 3) Aset static asal sama (landing page, ikon.svg)
-  if (url.origin === location.origin) {
-    if (request.mode === 'navigate' || request.destination === 'document') {
-      event.respondWith(staleWhileRevalidate(request, STATIC_CACHE));
-      return;
-    }
-    event.respondWith(cacheFirst(request, STATIC_CACHE));
-    return;
-  }
-
-  // 4) Lainnya: network-first dengan fallback cache
-  event.respondWith(networkFirst(request, STATIC_CACHE));
+  // 4) App shell (index.html) — network-first, fallback ke cache saat offline
+  event.respondWith(
+    caches.open(CACHE_DINAMIS).then(function (cache) {
+      return fetch(req).then(function (res) {
+        if (res && res.status === 200) { cache.put(req, res.clone()); }
+        return res;
+      }).catch(function () {
+        return cache.match(req);
+      });
+    })
+  );
 });
 
-/* ---------- MESSAGE: komunikasi dengan halaman ---------- */
-self.addEventListener('message', function (event) {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-  if (event.data && event.data.type === 'CLEAR_APP_CACHE') {
-    caches.delete('siapbk-tampilan').then(function () {
-      event.source && event.source.postMessage({ type: 'APP_CACHE_CLEARED' });
-    });
-  }
+// Pesan dari halaman: SKIP_WAITING agar update langsung aktif
+self.addEventListener('message', function (e) {
+  if (e.data && e.data.type === 'SKIP_WAITING') { self.skipWaiting(); }
 });
