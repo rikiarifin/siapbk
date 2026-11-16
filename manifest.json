@@ -1,0 +1,20 @@
+{
+  "name": "SIAP BK - SMP Negeri 3 Sepatan Timur",
+  "short_name": "SIAP BK",
+  "description": "Sistem Informasi & Administrasi Program Bimbingan dan Konseling",
+  "start_url": "/siapbk/smpn3septim/",
+  "scope": "/siapbk/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#1e1b4b",
+  "lang": "id",
+  "icons": [
+    {
+      "src": "/siapbk/ikon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
