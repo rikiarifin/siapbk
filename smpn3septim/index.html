@@ -142,7 +142,12 @@ function siapShim() {
       if (!r.ok) throw new Error('Server sedang sibuk (' + r.status + '). Coba lagi sebentar.');
       return r.json();
     }).then(function (res) {
-      if (res && res.ok) { if (st.ok) st.ok(res.result, st.uo); }
+      if (res && res.ok) {
+        if (nama === 'authLogin' && res.result && res.result.paketAwal) {
+          window.__paketLoginAwal = res.result.paketAwal;
+        }
+        if (st.ok) st.ok(res.result, st.uo);
+      }
       else { var e = new Error((res && res.error) || 'Permintaan gagal.'); if (st.gagal) st.gagal(e, st.uo); else console.error(e); }
     }).catch(function (err) {
       var e = err instanceof Error ? err : new Error(String(err));
